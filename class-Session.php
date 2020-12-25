@@ -1,5 +1,5 @@
 <?php
-# Copyright (C) 2015, 2018, 2019 Valerio Bozzolan
+# Copyright (C) 2015, 2018, 2019, 2020 Valerio Bozzolan
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -20,12 +20,60 @@ define_default( 'SESSION_DURATION',  604800 );
 // the default user logged-in class
 define_default( 'SESSIONUSER_CLASS', 'Sessionuser' );
 
+// the default algorithm for the User fingerprint
+define_default( 'SESSION_FINGERPRINT_ALGO', 'sha256' );
+
 /**
  * Session handler
  *
  * Note that actually we do NOT need server sessions <3
  */
 class Session {
+
+	/*
+	 * A login( & $status ) value.
+	 *
+	 * This is the value for a correct login (correct username/password and active account).
+	 */
+	const OK = 0;
+
+	/**
+	 * A login( & $status ) value.
+	 *
+	 * This is the value for a login failure (user/password match is wrong).
+	 */
+	const LOGIN_FAILED = 1;
+
+	/**
+	 * A login( & $status ) value.
+	 *
+	 * This happens when you are already logged-in. Don't know why you have retried the login.
+	 */
+	const ALREADY_LOGGED = 2;
+
+	/**
+	 * A login( & $status ) value.
+	 *
+	 * This happens when you forgot to send the User UID (your username).
+	 */
+	const EMPTY_USER_UID = 4;
+
+	/**
+	 * A login( & $status ) value.
+	 *
+	 * This happens when you forgot to send the password.
+	 */
+	const EMPTY_USER_PASSWORD = 8;
+
+	/**
+	 * A login( & $status ) $value.
+	 *
+	 * This happen when the User is not active and so cannot login.
+	 * You may want to send him a confirmation email before allowing him to login.
+	 *
+	 * This happen when the 'user_active' field is not 1.
+	 */
+	const USER_DISABLED = 64;
 
 	/**
 	 * User currently logged
@@ -40,6 +88,23 @@ class Session {
 	 * @var bool
 	 */
 	private $mustValidate = true;
+
+	/**
+	 * Last CSRF generated
+	 *
+	 * @var string
+	 */
+	private $csrf;
+
+	/**
+	 * Constructor
+	 */
+	public function __construct() {
+		// remember the existing CSRF if available
+		if( isset( $_COOKIE['csrf'] ) ) {
+			$this->csrf = $_COOKIE['csrf'];
+		}
+	}
 
 	/**
 	 * Get the singleton instance
@@ -74,16 +139,6 @@ class Session {
 		}
 		return $this->user;
 	}
-
-	/*
-	 * Login statuses
-	 */
-	const OK                  = 0;
-	const LOGIN_FAILED        = 1;
-	const ALREADY_LOGGED      = 2;
-	const EMPTY_USER_UID      = 4;
-	const EMPTY_USER_PASSWORD = 8;
-	const USER_DISABLED       = 64;
 
 	/**
 	 * Do a login
@@ -151,18 +206,37 @@ class Session {
 		$status = self::OK;
 
 		// set cookies
-		$duration    = time() + SESSION_DURATION;
-		$path        = ROOT . _;
-		$force_https = PROTOCOL === 'https://';
-		setcookie( 'user_uid', $user->getSessionuserUID(),              $duration, $path, '', $force_https, false );
-		setcookie( 'token',    $user->generateSessionuserCookieToken(), $duration, $path, '', $force_https, true  );
-		setcookie( 'csrf',     $this->generateCSRF(),                   $duration, $path, '', $force_https, true  );
+		$this->setCookie( 'user_uid', $user->getSessionuserUID(),              false );
+		$this->setCookie( 'token',    $user->generateSessionuserCookieToken(), true  );
+
+		// it's a good moment to renew the anti-CSRF token
+		$this->renewCSRF();
 
 		return true;
 	}
 
 	/**
-	 * Validate the user session from cookies
+	 * Set a cookie
+	 *
+	 * @param string  $name     Cookie name
+	 * @param string  $value    Cookie value
+	 * @param boolean $httponly When true do not expose via JavaScript
+	 * @param int     $duration Duration in milliseconds since now (or zero for the end of the browser session) (as default, is SESSION_DURATION)
+	 */
+	public function setCookie( $name, $value, $httponly = false, $duration = null ) {
+		if( $duration === null ) {
+			$duration = SESSION_DURATION;
+		}
+		if( $duration !== 0 ) {
+			$duration += time();
+		}
+		$path        = ROOT . _;
+		$force_https = PROTOCOL === 'https://';
+		setcookie( $name, $value, $duration, $path, '', $force_https, $httponly );
+	}
+
+	/**
+	 * Validate the session
 	 */
 	private function validate() {
 
@@ -201,9 +275,11 @@ class Session {
 		$invalidate = time() - 8000;
 		$path = ROOT . _;
 
-		setcookie( 'user_uid', 'asd', $invalidate, $path );
-		setcookie( 'token',    'asd', $invalidate, $path );
-		setcookie( 'csrf',     'asd', $invalidate, $path );
+		// try to destroy the cookies (leave the csrf that is useful anyway)
+		if( !headers_sent() ) {
+			setcookie( 'user_uid', 'asd', $invalidate, $path );
+			setcookie( 'token',    'asd', $invalidate, $path );
+		}
 
 		// logout
 		$this->user = null;
@@ -211,29 +287,29 @@ class Session {
 	}
 
 	/**
-	 * Get the CSRF token of the current user
-	 *
-	 * Note that it's valid only for logged-in users.
+	 * Get the CSRF token (or send a new one)
 	 *
 	 * @return string
 	 */
 	public function getCSRF() {
-		// TODO: remove that '@' put for backward compatibility with old sessions
-		return @$_COOKIE['csrf'];
+		if( empty( $this->csrf ) ) {
+			$this->renewCSRF();
+		}
+		return $this->csrf;
 	}
 
 	/**
-	 * Print a form action field with the CSRF
+	 * Print a form action field with the anti-CSRF token
 	 *
-	 * @param string $action
+	 * @param string $action Form action (e.g. 'save-user')
 	 */
 	public function formActionWithCSRF( $action ) {
-		echo HTML::input( 'hidden', 'action', $action );
-		echo HTML::input( 'hidden', 'csrf', Session::instance()->getCSRF() );
+		echo HTML::input( 'hidden', 'csrf',   $this->getCSRF() );
+		echo HTML::input( 'hidden', 'action', $action          );
 	}
 
 	/**
-	 * Check if a form action is valid (with the related CSRF)
+	 * Check if a form action is valid (with the related anti-CSRF token)
 	 *
 	 * @param string $action
 	 * @return boolean
@@ -247,13 +323,17 @@ class Session {
 	}
 
 	/**
-	 * Generate a new CSRF token
+	 * Generate a new anti-CSRF token
 	 *
-	 * @param int $bytes How much bytes to generate
+	 * This will also send a new COOKIE.
+	 *
+	 * @param  int    $bytes How much random bytes for the anti-CSRF token
 	 * @return string
 	 */
-	private function generateCSRF( $bytes = 8 ) {
-		return bin2hex( openssl_random_pseudo_bytes( $bytes ) );
+	public function renewCSRF( $bytes = 8 ) {
+		$this->csrf = bin2hex( openssl_random_pseudo_bytes( $bytes ) );
+		$this->setCookie( 'csrf', $this->csrf, true );
+		return $this->csrf;
 	}
 
 	/**

@@ -1,5 +1,5 @@
 <?php
-# Copyright (C) 2017, 2018, 2019 Valerio Bozzolan
+# Copyright (C) 2017, 2018, 2019, 2020 Valerio Bozzolan
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -71,9 +71,9 @@ class Query {
 	/**
 	 * "WHERE" conditions
 	 *
-	 * @var array
+	 * @var string
 	 */
-	private $conditions;
+	private $conditions = '';
 
 	/**
 	 * "ORDER BY" statements
@@ -95,6 +95,20 @@ class Query {
 	 * @var int
 	 */
 	private $rowCount;
+
+	/**
+	 * Default glue for the conditions
+	 *
+	 * @var string
+	 */
+	private $glue = 'AND';
+
+	/**
+	 * Flag that indicates if the next condition statements needs a glue
+	 *
+	 * @var boolean
+	 */
+	private $needsGlue = false;
 
 	/**
 	 * Constructor
@@ -134,6 +148,48 @@ class Query {
 	}
 
 	/**
+	 * Selected fields eventually with an AS field
+	 *
+	 * @param string $select Select field
+	 * @param string $as     AS column name
+	 * @return self
+	 */
+	public function selectAs( $select, $as = null ) {
+		if( $as ) {
+			$as = " $as";
+		}
+		return $this->select( "( $select )$as" );
+	}
+
+	/**
+	 * Select an EXISTS subquery
+	 *
+	 * @param Query   $query
+	 * @param string  $alias Result alias
+	 * @param boolean $positive Set to false to have a "NOT EXISTS"
+	 * @return self
+	 */
+	public function selectExists( $query, $alias = false, $positive = true ) {
+		$query_txt = $query->getQuery();
+		$query_txt = "EXISTS( $query_txt )";
+		if( !$positive ) {
+			$query_txt = "NOT $query_txt";
+		}
+		return $this->selectAs( $query_txt, $alias );
+	}
+
+	/**
+	 * Select an EXISTS subquery
+	 *
+	 * @param Query   $query
+	 * @param string  $alias Result alias
+	 * @return self
+	 */
+	public function selectNotExists( $query, $alias = false ) {
+		return $this->selectExists( $query, $alias, false );
+	}
+
+	/**
 	 * Selected tables
 	 *
 	 * @param string|array $tables Table/tables without database prefix
@@ -141,6 +197,18 @@ class Query {
 	 */
 	public function from() {
 		return $this->appendInArray( func_get_args(), $this->tables );
+	}
+
+	/**
+	 * Select a table with a custom alias
+	 *
+	 * @param  string $from  Table name to be used in the FROM (without table prefix)
+	 * @param  string $alias Your table alias (the "AS something" part)
+	 * @return self
+	 */
+	public function fromAlias( $from, $alias ) {
+		$this->from[] = $this->db->getTable( $from, $alias );
+		return $this;
 	}
 
 	/**
@@ -163,19 +231,20 @@ class Query {
 	 * @param string $glue Conditions glue
 	 * @return self
 	 */
-	public function compare( $one, $verb, $two, $glue = 'AND' ) {
+	public function compare( $one, $verb, $two, $glue = null ) {
 		return $this->where( "$one $verb $two", $glue );
 	}
 
 	/**
 	 * To be used for PRIMARY KEY joins
 	 *
-	 * @param string $one Something (NOT SANITIZED)
-	 * @param string $two Something (NOT SANITIZED)
+	 * @param string $one  Something (NOT SANITIZED)
+	 * @param string $two  Something (NOT SANITIZED)
+	 * @param string $glue Conditions glue
 	 * @return self
 	 */
-	public function equals( $one, $two ) {
-		return $this->compare( $one, '=', $two );
+	public function equals( $one, $two, $glue = null ) {
+		return $this->compare( $one, '=', $two, $glue );
 	}
 
 	/**
@@ -185,11 +254,15 @@ class Query {
 	 * @param string $glue      Conditions glue
 	 * @return self
 	 */
-	public function where( $condition, $glue = 'AND' ) {
-		if( null !== $this->conditions ) {
+	public function where( $condition, $glue = null ) {
+		if( $this->needsGlue ) {
+			if( !$glue ) {
+				$glue = $this->glue;
+			}
 			$this->conditions .= " $glue ";
 		}
 		$this->conditions .= $condition;
+		$this->needsGlue = true;
 		return $this;
 	}
 
@@ -199,10 +272,11 @@ class Query {
 	 * @param  string $one   Column name
 	 * @param  int    $value Value
 	 * @param  string $verb  Compare method
+	 * @param  string $glue  Condition glue
 	 * @return self
 	 */
-	public function whereInt( $column, $value, $verb = '=' ) {
-		return $this->compare( $column, $verb, (int)$value );
+	public function whereInt( $column, $value, $verb = '=', $glue = null ) {
+		return $this->compare( $column, $verb, (int)$value, $glue );
 	}
 
 	/**
@@ -211,11 +285,12 @@ class Query {
 	 * @param  string $one   Column name
 	 * @param  string $value Value
 	 * @param  string $verb  Compare method
+	 * @param  string $glue  Condition glue
 	 * @return self
 	 */
-	public function whereStr( $column, $value, $verb = '=' ) {
+	public function whereStr( $column, $value, $verb = '=', $glue = null ) {
 		$value = esc_sql( $value );
-		return $this->compare( $column, $verb, "'$value'" );
+		return $this->compare( $column, $verb, "'$value'", $glue );
 	}
 
 	/**
@@ -323,7 +398,7 @@ class Query {
 	 * @param string|array $needles  Values to compare
 	 * @return self
 	 */
-	public function whereSomethingIn( $heystack, $needles, $glue = 'AND', $not_in = false ) {
+	public function whereSomethingIn( $heystack, $needles, $glue = null, $not_in = false ) {
 		force_array( $needles );
 
 		// no needles no filter
@@ -364,8 +439,42 @@ class Query {
 	 * @param string $heystack Field.
 	 * @param string|array $needles Values to compare.
 	 */
-	public function whereSomethingNotIn( $heystack, $needles, $glue = 'AND' ) {
+	public function whereSomethingNotIn( $heystack, $needles, $glue = null ) {
 		return $this->whereSomethingIn( $heystack, $needles, $glue, true ); // See true
+	}
+
+	/**
+	 * Set the default glue
+	 *
+	 * @param string $glue
+	 * @return self
+	 */
+	public function setGlue( $glue ) {
+		$this->glue = $glue;
+		return $this;
+	}
+
+	/**
+	 * Open a bracket
+	 *
+	 * @param  string $glue Condition glue
+	 * @return self
+	 */
+	public function openBracket( $glue = null ) {
+		$this->where( '(', $glue );
+		$this->needsGlue = false;
+		return $this;
+	}
+
+	/**
+	 * Close a bracket
+	 *
+	 * @return self
+	 */
+	public function closeBracket() {
+		$this->conditions .= ')';
+		$this->needsGlue = true;
+		return $this;
 	}
 
 	/**
@@ -463,7 +572,13 @@ class Query {
 	 * @see https://dev.mysql.com/doc/refman/8.0/en/select.html
 	 */
 	public function getQuery() {
-		$sql = "SELECT {$this->getSelect()} FROM {$this->getFrom()}";
+		$sql = "SELECT {$this->getSelect()}";
+
+		$from = $this->getFrom();
+		if( $from ) {
+			$sql .= " FROM $from";
+		}
+
 		if( $this->conditions ) {
 			$sql .= " WHERE {$this->conditions}";
 		}
@@ -481,6 +596,29 @@ class Query {
 			$sql .= " FOR UPDATE";
 		}
 		return $sql;
+	}
+
+	/**
+	 * Where a subquery exists
+	 *
+	 * @param $query object  Query
+	 * @param $not   boolean Set to FALSE to have a NOT EXISTS
+	 * @return self
+	 */
+	public function whereExists( $query, $exists = true ) {
+		$verb = $exists ? 'EXISTS' : 'NOT EXISTS';
+		$query_raw = $query->getQuery();
+		return $this->where( "$verb ($query_raw)" );
+	}
+
+	/**
+	 * Where a subquery not exists
+	 *
+	 * @param $query object Query
+	 * @return self
+	 */
+	public function whereNotExists( $query ) {
+		return $this->whereExists( $query, false );
 	}
 
 	/**

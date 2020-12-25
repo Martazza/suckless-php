@@ -36,7 +36,7 @@ class RegisterJS {
 	 */
 	public static function instance() {
 		static $me = false;
-		if( ! $me ) {
+		if( !$me ) {
 			$me = new self();
 		}
 		return $me;
@@ -45,16 +45,25 @@ class RegisterJS {
 	/**
 	 * Register a new script name
 	 *
-	 * @param string $name         Script name, like: "jquery"
+	 * This will not automatically enqueue it (normally).
+	 *
+	 * @param string $name         Script name, like: "jquery" (or just true for whatever, to enqueue it)
 	 * @param mixed  $url          Script url, like "http://example.org/lib/jquery.js"
 	 * @param string $position     header|footer
 	 * @param array  $dependencies Dependent script names
 	 */
 	public function register( $uid, $url, $position = null, $dependencies = [] ) {
-		if( ! $position ) {
+
+		// assume the default position
+		if( !$position ) {
 			$position = self::$DEFAULT;
 		}
-		$this->js[ $uid ] = new JS( $uid, $url, $position, $dependencies );
+
+		// create the object
+		$js = new JS( $uid, $url, $position, $dependencies );
+
+		// append
+		$this->js[ $uid ] = $js;
 	}
 
 	/**
@@ -65,11 +74,13 @@ class RegisterJS {
 	 * @param string $position before|after
 	 */
 	public function registerInline( $uid, $data, $position ) {
-		if( isset( $this->js[ $uid ] ) ) {
-			$this->js[ $uid ]->inline[ $position ][] = $data;
-		} else {
-			throw new SucklessException( "missing script '$uid'" );
+
+		// no script no party
+		if( !isset( $this->js[ $uid ] ) ) {
+			throw new SucklessException( "cannot register inline on missing JavaScript '$uid'" );
 		}
+
+		$this->js[ $uid ]->inline[ $position ][] = $data;
 	}
 
 	/**
@@ -82,6 +93,12 @@ class RegisterJS {
 	 * @param $position string Place it in the head of the page or not
 	 */
 	public function enqueue( $uid, $position = null ) {
+
+		// no script no party
+		if( !isset( $this->js[ $uid ] ) ) {
+			throw new SucklessException( "cannot enqueue missing JavaScript '$uid'" );
+		}
+
 		$js = $this->js[ $uid ];
 
 		// eventually override script position
@@ -176,14 +193,16 @@ class JS {
 	 * @param $glue string
 	 */
 	public function printNormal( $glue ) {
-		$url = $this->url;
-		if( CACHE_BUSTER ) {
-			$url .= false === strpos( $url, '?' ) ? '?' : '&amp;';
-			$url .= CACHE_BUSTER;
-		}
-		echo "$glue<script src=\"$url\"></script>";
-		if( DEBUG ) {
-			echo "<!-- {$this->uid} -->";
+		if( $this->url ) {
+			$url = site_page( $this->url );
+			if( CACHE_BUSTER ) {
+				$url .= false === strpos( $url, '?' ) ? '?' : '&amp;';
+				$url .= CACHE_BUSTER;
+			}
+			echo "$glue<script src=\"$url\"></script>";
+			if( DEBUG ) {
+				echo "<!-- {$this->uid} -->";
+			}
 		}
 	}
 }

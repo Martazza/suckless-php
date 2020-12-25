@@ -1,5 +1,5 @@
 <?php
-# Copyright (C) 2015, 2016, 2017 Valerio Bozzolan
+# Copyright (C) 2015, 2016, 2017, 2018, 2019 Valerio Bozzolan
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -13,6 +13,9 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+// fifo system default
+define_default( 'MAGIC_MIME_FILE', null );
 
 /**
  * Handle MIME and file types (extensions).
@@ -173,14 +176,14 @@ class MimeTypes {
 	}
 
 	/**
-	 * Get the file types of a MIME.
+	 * Get the file types of a MIME
 	 *
 	 * @param string|null $category
 	 * 	If NULL it search in all the categories.
 	 * @param string|null $mimetype The MIME type.
 	 * @return mixed FALSE if the MIME is not registered or an array of file types.
 	 */
-	public function getFiletypes($categories = null, $mimetype = null) {
+	public function getFiletypes( $categories = null, $mimetype = null ) {
 		$all_types = [];
 
 		if( $categories === null ) {
@@ -214,59 +217,68 @@ class MimeTypes {
 	}
 
 	/**
-	 * Check (and get) the known file extension.
+	 * Extract the file extension from a filename (if it's correct)
 	 *
-	 * @param string $filename The file name.
-	 * @param array|string|null $categories MIME categories.
-	 * @param string|null $mimetype The MIME type.
-	 * @return string|false FALSE or the file extension e.g.: 'png'
+	 * @param  string            $filename   The file name to be checked
+	 * @param  array|string|null $categories File categories (e.g. 'image'), NULL for every
+	 * @param  string|null       $mimetype   The file mime type (NULL to inherit from the file)
+	 * @return string|false                  The file extension e.g.: 'png' or FALSE on failure
 	 */
-	public function getFileExtensionFromExpectations($filename, $categories = null, $mimetype = null) {
+	public function getFileExtensionFromExpectations( $filename, $categories = null, $mimetype = null ) {
 
-		// Have to insert an arg to enable this feature?
-		// ASD.JPEG => asd.jpeg
-		// @TODO
-		$filename = strtolower($filename);
+		// normalize the file name
+		// @TODO: have to insert an arg to enable this feature?
+		//    ASD.JPEG => asd.jpeg
+		$filename = strtolower( $filename );
 
-		$expected_filetypes = $this->getFiletypes($categories, $mimetype);
-		foreach($expected_filetypes as $filetype) {
+		// guess the mime type
+		if( !$mimetype ) {
+			$mimetype = self::fileMimetype( $filename );
+		}
+
+		// compare every known file extensions with the filename
+		$expected_filetypes = $this->getFiletypes( $categories, $mimetype );
+		foreach( $expected_filetypes as $filetype ) {
 			$dotted = ".$filetype";
-			$strlen = strlen($dotted);
+			$strlen = strlen( $dotted );
 			if( substr( $filename, -$strlen, $strlen) === $dotted ) {
 				return $filetype;
 			}
 		}
+
 		return false;
 	}
 
 	/**
-	 * Get the MIME type from a file.
+	 * Guess the MIME type from a file
 	 *
-	 * @param string $filepath The file path.
-	 * @param bool $pure
-	 * 	true for 'image/png; something';
-	 * 	false for 'image/png'.
+	 * It requires the existence of the MAGIC_MIME_FILE constant.
+	 *
+	 * @param string        $filepath The file path
+	 * @param bool          $pure     Set to true for 'image/png; something'; or false for 'image/png' (default)
 	 * @return string|false
 	 */
 	public static function fileMimetype( $filepath, $pure = false ) {
 		$finfo = finfo_open( FILEINFO_MIME, MAGIC_MIME_FILE );
-		if( ! $finfo ) {
-			return error( sprintf(
-				'error opening the fileinfo database expected in %s',
+		if( !$finfo ) {
+			error( sprintf(
+				'error opening fileinfo database placed in %s',
 				MAGIC_MIME_FILE
 			) );
+			return false;
 		}
+
 		$mime = finfo_file( $finfo, $filepath );
-		if( ! $mime ) {
-			return error( sprintf(
-				"can't detect the mime of the file %s",
-				$filepath
-			) );
+		if( !$mime ) {
+			error( "can't detect MIME of file $filepath" );
+			return false;
 		}
-		if( ! $pure ) {
+
+		if( !$pure ) {
 			$mime = explode(';', $mime, 2); // Split "; charset"
 			$mime = $mime[0];
 		}
+
 		return $mime;
 	}
 

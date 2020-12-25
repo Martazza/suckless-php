@@ -611,6 +611,13 @@ function is_action( $action ) {
 }
 
 /**
+ * Require a CSRF token to use the actual page
+ */
+function require_csrf() {
+	Session::instance()->getCSRF();
+}
+
+/**
  * Register a language
  *
  * @param string $code    Language code e.g. 'en_US'
@@ -706,14 +713,19 @@ function has_permission( $permission, $user = null ) {
  * If the base URL it is not defined, a slash ('/') is appended to the URL.
  * The base URL could end with a slash ('/') or not.
  *
- * @param  string $base Base URL with/without any slash at start
- * @param  string $dir  Directory without any slash
- * @return string       URL / Pathname
+ * @param  string $base Base URL or pathname with/without any slash at start
+ * @param  string $dir  Directory or partial pathname with or without initial slashes
+ * @param  string $glue Directory separator (as default it's the '/' for URLs)
+ * @return string       The junction between $base and $glue
 */
-function append_dir( $base, $dir = '/' ) {
-	$base = rtrim( $base, '/' );
-	$dir  = ltrim( $dir, '/' );
-	return $base . _ . $dir;
+function append_dir( $base, $dir = '', $glue = null ) {
+	if( !$glue ) {
+		// pick default URL separator '/'
+		$glue = _;
+	}
+	$base = rtrim( $base, $glue );
+	$dir  = ltrim( $dir,  $glue );
+	return $base . $glue . $dir;
 }
 
 /**
@@ -914,6 +926,24 @@ function json_error( $http_code, $code, $msg = null, $flags = 0 ) {
 }
 
 /**
+ * Validate a CSRF token or exit with a JSON error
+ *
+ * @param string $csrf
+ */
+function json_require_csrf( $csrf = null ) {
+
+	// eventually read the default value
+	if( !$csrf && isset( $_POST['csrf'] ) ) {
+		$csrf = $_POST['csrf'];
+	}
+
+	// no CSRF no party: die
+	if( $csrf !== Session::instance()->getCSRF() ) {
+		json_error( 403, 'forbidden-invalid-csrf', __( "This request was not executed for security reasons. Eventually try to reload the page and try again (invalid CSRF)." ) );
+	}
+}
+
+/**
  * Get the MIME type of a file
  *
  * @param string $filepath Filesystem file path
@@ -928,17 +958,19 @@ function get_mimetype( $filepath, $pure = false ) {
  *
  * @param string $filepath Filesystem file path
  * @param string $category File category e.g. 'image'
- * @see MimeTypes::isMimetypeInCategory()
+ * @see MimeTypes#isMimetypeInCategory()
  */
 function is_file_in_category( $filepath, $category ) {
 	$mime = get_mimetype( $filepath );
-	return MimeTypes::instance()->isMimetypeInCategory( $mime , $category );
+	return MimeTypes::instance()->isMimetypeInCategory( $mime, $category );
 }
 
 /**
- * Get a file extension
+ * Extract the file extension from a filename (if it respects the file MIME type)
  *
- * @param string $filename Filesystem file path
+ * @param  string $filename Filesystem file path
+ * @param  string $category File category e.g. 'image'
+ * @return mixed File extension or false if it was not found
  */
 function get_file_extension_from_expectations( $filename, $category ) {
 	return MimeTypes::instance()->getFileExtensionFromExpectations( $filename, $category );
@@ -1022,15 +1054,28 @@ function search_free_filename( $filepath, $filename, $ext, $args, $build_filenam
 }
 
 /**
- * I use this to clean user input before DB#insert()
+ * I use this function to clean a stupid user input string before
+ * sanitizing and sending it to the database server.
  *
- * This does not mean that it sanitizes the string.
+ * This is useful to silently avoid some inappropriate uses:
+ *  do not send long LIKE queries to the database server
+ *  do not output long «Search results for: xxx»
+ *
+ * This may be useful for non-important information. For example when
+ * you have a search field that should be not longer than 200 chars
+ * and instead of throwing an exception you can just drop the surplus.
+ *
+ * It casts to string on order to avoid a warning when a malicious
+ * user try to send something else like an array (using 'foo[]=asd').
+ *
+ * Do not use this for important stuff. Do more checks.
  *
  * @param string $s Input string
  * @param int $max Max length
  * @return string
  */
 function luser_input( $s, $max ) {
+	$s = (string) $s;
 	return mb_strimwidth( trim( $s ), 0, $max, '' );
 }
 

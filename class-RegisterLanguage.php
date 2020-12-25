@@ -191,9 +191,22 @@ class RegisterLanguage {
 	}
 
 	/**
+	 * Get the language registered as the default one
+	 *
 	 * @return SucklessPHPLanguage|null
 	 */
-	function getLatestLanguageApplied() {
+	public function getDefault() {
+		return $this->default;
+	}
+
+	/**
+	 * Get the latest language applied
+	 *
+	 * If you declared a default language, this never returns null.
+	 *
+	 * @return SucklessPHPLanguage|null
+	 */
+	public function getLatestLanguageApplied() {
 		return $this->latest ? $this->latest : $this->default;
 	}
 
@@ -355,8 +368,8 @@ class SucklessPHPLanguage {
 	 * @return string
 	 */
 	public function getISO() {
-		if($this->iso === null) {
-			$this->iso = self::guessISO($this->iso);
+		if( $this->iso === null ) {
+			$this->iso = self::guessISO( $this->code );
 		}
 		return $this->iso;
 	}
@@ -386,19 +399,17 @@ class SucklessPHPLanguage {
 	 *
 	 * Can be called statically if you provide $code.
 	 *
-	 * @param  string $code     Language code
-	 * @param  string $fallback Language ISO code used as fallback
+	 * @param  string $code Language code
 	 * @return string
 	 */
-	private function guessISO( $code = null, $fallback = 'en' ) {
-		if( $code === null ) {
-			$code = $this->code;
-		}
+	private static function guessISO( $code = null ) {
+
 		$p = strpos( $code, '_' );
-		if( false === $p ) {
-			error( "can't guess the ISO language from $code, falling on $fallback" );
-			return $fallback;
+		if( $p !== false ) {
+			return substr( $code, 0, $p );
 		}
-		return substr( $code, 0, $p );
+
+		// just return that string
+		return $code;
 	}
 }
